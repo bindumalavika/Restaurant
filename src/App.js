@@ -280,10 +280,41 @@ const App = () => {
               ))}
               <div className="total">
                 <h3>Total: ${totalAmount}</h3>
-                <button onClick={() => {
-                  alert(`Total Amount: ₹${totalAmount}`);
-                  resetSession();
-                }}>
+                <button onClick={async () => {
+  try {
+    const timestamp = new Date().toISOString();
+    const orderId = `T${tableNumber}_${timestamp.replace(/[-:T.Z]/g, '').slice(0, 14)}`;
+
+    const payload = {
+      orderId,
+      timestamp,
+      tableNumber,
+      cart: cart.map(item => ({
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity
+      })),
+      total: totalAmount
+    };
+
+    const response = await fetch(process.env.REACT_APP_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) throw new Error('Order failed');
+
+    const result = await response.json();
+    alert(`Order placed successfully! Order ID: ${result.orderId || orderId}`);
+    resetSession();
+  } catch (error) {
+    alert('Failed to place order. Please try again.');
+    console.error(error);
+  }
+}}>
                   Place Order
                 </button>
               </div>
