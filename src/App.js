@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
+import dosaImage from './assets/dosa.jpeg';
+import idlyImage from './assets/idly.png';
+import paneerTikkaImage from './assets/paneer-tikka.jpg';
+import vegManchurianImage from './assets/veg-manchurian.jpg';
+import chickenBiryaniImage from './assets/chicken-biryani.jpg';
+import vegPulaoImage from './assets/veg-pulao.jpg';
+import gulabJamunImage from './assets/gulab-jamun.jpg';
+import halwaImage from './assets/halwa.jpg';
+import lassiImage from './assets/lassi.jpg';
+import masalaChaiImage from './assets/masala-chai.jpg';
 
 const menu = [
-  {name:'Dosa', price:7, category:'tiffin', veg: true},        
-  {name:'Idly', price:5, category:'tiffin', veg: true},        
-  {name:'Paneer Tikka', price:10, category:'starter', veg: true}, 
-  {name:'Veg Manchurian', price:12, category:'starter', veg: true},
-  {name:'Chicken Biryani', price:15, category:'main course', veg: false}, 
-  {name:'Veg Pulao', price:12, category:'main course', veg: true},
-  {name:'Gulab Jamun', price:3, category:'dessert', veg: true}, 
-  {name:'Halwa', price:5, category:'dessert', veg: true},
-  {name:'Lassi', price:5, category:'beverage', veg: true},
-  {name:'Masala Chai', price:2, category:'beverage', veg: true}, 
+  {name:'Dosa', price:7, category:'tiffin',image: dosaImage, veg: true},        
+  {name:'Idly', price:5, category:'tiffin',image: idlyImage, veg: true},        
+  {name:'Paneer Tikka', price:10, category:'starter',image: paneerTikkaImage, veg: true}, 
+  {name:'Veg Manchurian', price:12, category:'starter',image: vegManchurianImage, veg: true},
+  {name:'Chicken Biryani', price:15, category:'main course',image: chickenBiryaniImage, veg: false}, 
+  {name:'Veg Pulao', price:12, category:'main course',image: vegPulaoImage, veg: true},
+  {name:'Gulab Jamun', price:3, category:'dessert', image: gulabJamunImage,veg: true}, 
+  {name:'Halwa', price:5, category:'dessert',image: halwaImage, veg: true},
+  {name:'Lassi', price:5, category:'beverage',image: lassiImage, veg: true},
+  {name:'Masala Chai', price:2, category:'beverage',image: masalaChaiImage, veg: true}, 
 ];
 
 const priceRanges = [
@@ -225,6 +235,7 @@ const App = () => {
           <div className="menu-items">
             {filteredMenu.map(item => (
               <div key={item.name} className="menu-item" onClick={() => handleItemClick(item)}>
+               <img src={item.image} alt={item.name} className="menu-image" />
                 <h3>{item.name}</h3>
                 <div className="price">${item.price}</div>
                 <div className="category">{item.category}</div>

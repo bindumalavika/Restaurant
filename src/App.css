@@ -292,6 +292,15 @@ button:hover {
   color: #666;
 }
 
+.menu-image {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+
 .category-buttons {
   display: flex;
   gap: 0.5rem;
