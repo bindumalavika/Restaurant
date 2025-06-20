@@ -1,0 +1,599 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation for Restaurant Ordering System → EC2 (React), S3 (PDFs), Lambda, API Gateway, SNS, DynamoDB, VPC, CloudWatch
+
+Parameters:
+  AL2023AMI:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+
+Resources:
+  ### Storage Layer - S3 for Order Bill PDFs ###
+  OrderBillBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: restaurant-order-bills
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        IgnorePublicAcls: false
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  OrderBillBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OrderBillBucket
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+          Action:
+          - s3:GetObject
+          Resource: !Sub 'arn:aws:s3:::${OrderBillBucket}/*'
+
+  ### Network Layer - VPC for Frontend EC2 Hosting ###
+  RestaurantVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  RestaurantPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref RestaurantVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+
+  RestaurantInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  RestaurantGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RestaurantVPC
+      InternetGatewayId: !Ref RestaurantInternetGateway
+
+  RestaurantRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RestaurantVPC
+
+  RestaurantDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: RestaurantGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RestaurantRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref RestaurantInternetGateway
+
+  RestaurantSubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref RestaurantPublicSubnet
+      RouteTableId: !Ref RestaurantRouteTable
+
+  ### EC2 Instance for Restaurant Frontend ###
+  RestaurantUIEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AL2023AMI
+      InstanceType: t2.medium
+      SubnetId: !Ref RestaurantPublicSubnet
+      SecurityGroupIds:
+      - !GetAtt RestaurantUISecurityGroup.GroupId
+      IamInstanceProfile: LabInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          # Set environment and working directory
+          export HOME=/home/ec2-user
+          cd $HOME
+
+          # Update and install required packages
+          dnf update -y
+          dnf install -y git nginx unzip awscli tar gzip shadow-utils
+
+          # Fix permissions
+          chown -R ec2-user:ec2-user $HOME
+
+          # Install Node.js (LTS)
+          curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+          dnf install -y nodejs
+
+          # Clone frontend React app
+          wget https://github.com/bindumalavika/Restaurant/archive/main.zip
+          unzip main.zip
+          cd Restaurant-main
+
+          # Set up environment variables
+          API_URL=$(aws ssm get-parameter --name "OrderApiUrl" --query "Parameter.Value" --output text --region ${AWS::Region})
+          echo "REACT_APP_API_URL=$API_URL" > .env
+          echo "REACT_APP_S3_BUCKET=restaurant-order-bills" >> .env
+
+          # Build the React app
+          npm install
+          npm run build
+
+          # Deploy to NGINX web root
+          mkdir -p /var/www/vhosts/frontend
+          cp -R build/* /var/www/vhosts/frontend/
+
+          # Configure NGINX
+          rm -f /etc/nginx/conf.d/default.conf || true
+          cat <<EOF > /etc/nginx/conf.d/frontend.conf
+          server {
+              listen 80;
+              server_name _;
+
+              root /var/www/vhosts/frontend;
+              index index.html;
+
+              location / {
+                try_files \$uri /index.html;
+              }
+          }
+          EOF
+
+          # Start NGINX
+          systemctl enable nginx
+          systemctl restart nginx
+
+          # Log success
+          echo "Frontend React app deployed with NGINX at port 80" >> /home/ec2-user/deploy.log
+
+  ### Security Group for Frontend EC2 ###
+  RestaurantUISecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow access to React frontend instance
+      VpcId: !Ref RestaurantVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0 # SSH (for access)
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0 # HTTP (NGINX)
+      - IpProtocol: tcp
+        FromPort: 3000
+        ToPort: 3000
+        CidrIp: 0.0.0.0/0 # React dev server (if needed during setup)
+
+  ### API Gateway for Restaurant Order Processing ###
+  RestaurantOrderApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RestaurantOrderAPI
+
+  RestaurantOrderResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt RestaurantOrderApi.RootResourceId
+      PathPart: order
+      RestApiId: !Ref RestaurantOrderApi
+
+  RestaurantOrderPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestaurantOrderApi
+      ResourceId: !Ref RestaurantOrderResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaPublishOrderFunction.Arn}/invocations
+
+  RestaurantOrderOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestaurantOrderApi
+      ResourceId: !Ref RestaurantOrderResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+            method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+            method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+      - StatusCode: 200
+        ResponseParameters:
+          method.response.header.Access-Control-Allow-Headers: true
+          method.response.header.Access-Control-Allow-Methods: true
+          method.response.header.Access-Control-Allow-Origin: true
+
+  RestaurantApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+    - RestaurantOrderPostMethod
+    - RestaurantOrderOptionsMethod
+    Properties:
+      RestApiId: !Ref RestaurantOrderApi
+      StageName: prod
+
+  LambdaInvokePermissionForApiGateway:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaPublishOrderFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestaurantOrderApi}/*/POST/order
+
+  RestaurantOrderApiUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: OrderApiUrl
+      Type: String
+      Value: !Sub https://${RestaurantOrderApi}.execute-api.${AWS::Region}.amazonaws.com/prod/order
+
+  ### Backend Resources ###
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Orders
+      AttributeDefinitions:
+      - AttributeName: orderId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: orderId
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+
+  OrderTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: OrderTopic
+
+  LambdaPublishOrderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: OrderPublishLambda
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 30
+      Environment:
+        Variables:
+          TOPIC_ARN: !Ref OrderTopic
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          sns = boto3.client('sns')
+          topic_arn = os.environ['TOPIC_ARN']
+          def lambda_handler(event, context):
+              body = json.loads(event['body'])
+              message = json.dumps(body)
+              sns.publish(
+                  TopicArn=topic_arn,
+                  Message=message,
+                  Subject='Order Placed Notification'
+              )
+              return {
+                  "statusCode": 200,
+                   "headers": {
+                      "Access-Control-Allow-Origin": "*",
+                      "Access-Control-Allow-Methods": "POST, OPTIONS",
+                      "Access-Control-Allow-Headers": "Content-Type"
+                  },
+                  "body": json.dumps({"message": "Published to SNS", "data": body})
+              }
+
+  FPDFLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+      - python3.12
+      Content:
+        S3Bucket: fpdf-lambda-layer-bucket
+        S3Key: python.zip
+      Description: Layer for fpdf library
+      LayerName: fpdf-layer
+
+  OrderHandler:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: OrderHandler
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/LabRole"
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref OrdersTable
+          BUCKET_NAME: !Ref OrderBillBucket
+          ALERT_TOPIC: !Ref HighValueOrderNotifier
+      Layers:
+      - !Ref FPDFLambdaLayer
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import uuid
+          import os
+          from datetime import datetime
+          from io import BytesIO
+          from fpdf import FPDF
+
+          dynamodb = boto3.resource('dynamodb')
+          s3 = boto3.client('s3')
+          sns = boto3.client('sns')
+          alert_topic = os.environ.get('ALERT_TOPIC')
+
+          class PDF(FPDF):
+              def header(self):
+                  self.set_font('Arial', 'B', 14)
+                  self.cell(0, 10, 'Restaurant Order Bill', ln=True, align='C')
+                  self.ln(10)
+
+              def table_header(self, headers, col_widths):
+                  self.set_font('Arial', 'B', 12)
+                  for i, header in enumerate(headers):
+                      self.cell(col_widths[i], 10, header, border=1, align='C')
+                  self.ln()
+
+              def table_row(self, row_data, col_widths):
+                  self.set_font('Arial', '', 12)
+                  self.cell(col_widths[0], 10, row_data[0], border=1)
+                  self.cell(col_widths[1], 10, str(row_data[1]), border=1, align='C')
+                  self.cell(col_widths[2], 10, f"${row_data[2]:.2f}", border=1, align='R')
+                  self.cell(col_widths[3], 10, f"${row_data[3]:.2f}", border=1, align='R')
+                  self.ln()
+
+          def lambda_handler(event, context):
+              table = dynamodb.Table(os.environ['TABLE_NAME'])
+              bucket_name = os.environ['BUCKET_NAME']
+
+              for record in event['Records']:
+                  message = json.loads(record['Sns']['Message'])
+                  orderId = message.get("orderId", str(uuid.uuid4()))
+                  timestamp = message.get('timestamp', datetime.now().isoformat())
+                  tableNumber = message.get('tableNumber')
+                  cart = message.get('cart', [])
+                  totalAmount = message.get('total', 0)
+
+                  # Store order in DynamoDB
+                  item = {
+                      'orderId': orderId,
+                      'timestamp': timestamp,
+                      'tableNumber': tableNumber,
+                      'cart': cart,
+                      'totalAmount': totalAmount
+                  }
+                  table.put_item(Item=item)
+                  if totalAmount > 100 and alert_topic:
+                    # Build item list string
+                    items_list = "\n".join([
+                        f"- {item['name']} (Qty: {item['quantity']}, Unit Price: ${item['price']}, Total: ${item['quantity'] * item['price']:.2f})"
+                        for item in cart
+                    ])
+
+                    # Create full message
+                    message = (
+                        f"A high-value order was placed!\n"
+                        f"Order ID: {orderId}\n"
+                        f"Table Number: {tableNumber}\n"
+                        f"Timestamp: {timestamp}\n"
+                        f"Total Amount: ${totalAmount:.2f}\n\n"
+                        f"Ordered Items:\n{items_list}"
+                    )
+                    sns.publish(
+                        TopicArn=alert_topic,
+                        Message=message,
+                        Subject="🚨 High Value Order Alert"
+                    )
+                  # PDF generation
+                  pdf = PDF()
+                  pdf.add_page()
+                  pdf.set_font('Arial', '', 12)
+
+                  # Order info
+                  pdf.cell(0, 10, f"Order ID: {orderId}", ln=True)
+                  pdf.cell(0, 10, f"Table Number: {tableNumber}", ln=True)
+                  pdf.cell(0, 10, f"Timestamp: {timestamp}", ln=True)
+                  pdf.ln(5)
+
+                  # Item table
+                  headers = ['Item Name', 'Quantity', 'Unit Price ($)', 'Total ($)']
+                  col_widths = [60, 30, 40, 40]
+                  pdf.table_header(headers, col_widths)
+
+                  for item in cart:
+                      name = item['name']
+                      qty = item['quantity']
+                      price = item['price']
+                      total = qty * price
+                      pdf.table_row([name, qty, price, total], col_widths)
+
+                  # Total row
+                  pdf.set_font('Arial', 'B', 12)
+                  pdf.cell(sum(col_widths[:3]), 10, "Total Amount", border=1)
+                  pdf.cell(col_widths[3], 10, f"${totalAmount:.2f}", border=1, align='R')
+                  pdf.ln(10)
+
+                  # Upload to S3
+                  pdf_output_str = pdf.output(dest='S')
+                  pdf_bytes = pdf_output_str.encode('latin1')
+                  pdf_buffer = BytesIO(pdf_bytes)
+
+                  s3.put_object(
+                      Bucket=bucket_name,
+                      Key=f"bills/{orderId}.pdf",
+                      Body=pdf_buffer,
+                      ContentType='application/pdf'
+                  )
+
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps("Order stored and bill uploaded successfully.")
+              }
+
+  SNSLambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderTopic
+      Protocol: lambda
+      Endpoint: !GetAtt OrderHandler.Arn
+
+  SNSInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OrderHandler
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref OrderTopic
+
+  HighValueOrderNotifier:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: HighValueOrderNotifier
+
+  HighValueOrderSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref HighValueOrderNotifier
+      Protocol: email
+      Endpoint: hyderabadizayka242000@gmail.com
+
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: RestaurantAppMonitoringDashboard
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "OrderPublishLambda" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "OrderPublishLambda" ],
+                  [ ".", "Duration", ".", ".", { "stat": "Average" } ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "OrderHandler" ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "OrderHandler" ]
+                ],
+                "title": "Lambda Function Metrics",
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "4XXError", "ApiName", "RestaurantOrderApi" ],
+                  [ ".", "5XXError", ".", "." ],
+                  [ ".", "Latency", ".", ".", { "stat": "Average" } ]
+                ],
+                "title": "API Gateway Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/EC2", "CPUUtilization", "InstanceId", "${RestaurantUIEC2}" ],
+                  [ ".", "NetworkIn", ".", "." ],
+                  [ ".", "NetworkOut", ".", "." ]
+                ],
+                "title": "Frontend EC2 Instance Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/S3", "NumberOfObjects", "BucketName", "restaurant-order-bills" ],
+                  [ ".", "AllRequests", ".", "." ]
+                ],
+                "title": "S3 Bucket Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/DynamoDB", "SuccessfulRequestLatency", "TableName", "Orders" ],
+                  [ ".", "ThrottledRequests", ".", "." ]
+                ],
+                "title": "DynamoDB Orders Table Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/SNS", "NumberOfMessagesPublished", "TopicName", "OrderTopic" ],
+                  [ ".", "NumberOfNotificationsDelivered", ".", "." ],
+                  [ ".", "NumberOfNotificationsFailed", ".", "." ]
+                ],
+                "title": "SNS OrderTopic Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  FrontendURL:
+    Value: !Sub "http://${RestaurantUIEC2.PublicDnsName}"
+  APIGatewayEndpoint:
+    Value: !Sub "https://${RestaurantOrderApi}.execute-api.${AWS::Region}.amazonaws.com/prod/order"
+  S3BucketName:
+    Value: !Ref OrderBillBucket
