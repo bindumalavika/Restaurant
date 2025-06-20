@@ -1,70 +1,119 @@
-# Getting Started with Create React App
+# 🍽️ Restaurant Ordering System
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A full-stack, cloud-native application for digital restaurant ordering. The system features a React frontend hosted on AWS EC2 and a serverless backend using AWS Lambda, API Gateway, DynamoDB, S3, and SNS.
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## 📝 Project Overview
 
-### `npm start`
+The **Restaurant Ordering System** streamlines dine-in restaurant operations by enabling customers to place orders digitally and automating backend processes such as order processing, bill generation, and real-time notifications. The solution is designed for scalability, cost-efficiency, and security, leveraging a hybrid AWS architecture that combines EC2-hosted frontend with serverless backend services. The entire infrastructure is provisioned using AWS CloudFormation for repeatable and reliable deployment.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 🎯 Key Features
 
-### `npm test`
+- **Contactless Digital Ordering:** Customers browse the menu and place orders via a web platform.
+- **Automated Order Processing:** Orders are handled in real-time by backend Lambda functions and stored in DynamoDB.
+- **PDF Bill Generation:** Each order triggers automatic bill creation as a PDF, stored securely in S3.
+- **Real-Time Notifications:** High-value orders trigger email alerts to admins using SNS.
+- **Secure and Scalable:** Data is encrypted in transit and at rest; the system auto-scales for varying loads.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## 🏗️ Architecture
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+![Architecture Diagram](images/architecture-diagram.png)
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+**Frontend**
+- React.js single-page application
+- Hosted on AWS EC2 (NGINX) within a secure VPC
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+**Backend**
+- AWS Lambda (Python): Stateless, event-driven order processing and PDF bill generation
+- Amazon API Gateway: RESTful endpoint for frontend-backend communication
+- Amazon DynamoDB: NoSQL database for order/session management
+- Amazon S3: Storage for generated PDF bills
+- Amazon SNS: Notifications for workflow triggers and admin alerts
+- Amazon CloudWatch: Centralized monitoring and logging
 
-### `npm run eject`
+---
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## 🛠️ Technologies Used
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+- **Frontend:** React.js, NGINX, EC2, AWS VPC
+- **Backend:** AWS Lambda (Python), API Gateway, DynamoDB, S3, SNS
+- **Infrastructure as Code:** AWS CloudFormation
+- **Monitoring:** Amazon CloudWatch
+- **Secrets Management:** AWS Systems Manager Parameter Store
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+---
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## 🚀 Deployment
 
-## Learn More
+The application is deployed using a single AWS CloudFormation template, automating the setup of all required infrastructure.
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Prerequisites
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- AWS CLI configured with appropriate permissions
+- Node.js and npm installed (for frontend)
+- Bash shell environment
 
-### Code Splitting
+### Deployment Steps
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+1. **Clone the repository**
+ ```bash
+git clone https://github.com/bindumalavika/Restaurant.git
+cd Restaurant
+```
 
-### Analyzing the Bundle Size
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+2. **Deploy infrastructure using CloudFormation**
+Run the deployment script
+```bash 
+chmod +x deploy.sh
+./deploy.sh
+```
 
-### Making a Progressive Web App
+3. **After deployment, the script will output**
+- The URL of the web application
+- The URL of the CloudWatch dashboard for monitoring
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+4. **Access the application**
+- Open the provided web application URL in your browser to use the system.
+- Use the CloudWatch dashboard URL to monitor logs and application health.
 
-### Advanced Configuration
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+## 📁 Project Structure
+```
+Restaurant/
+├── frontend/                  # React app source
+│   ├── public/
+│   ├── src/
+│   ├── package-lock.json
+│   └── package.json
+├── images/                    # Project images and diagrams
+│   └── architecture-diagram.png
+├── infrastructure/            # Infrastructure as Code and Lambda layers
+│   ├── lambda-layer/
+│   │   └── python.zip
+│   └── restaurant-ordering-IAC.yaml
+├── .gitignore
+├── deploy.sh                  # Deployment script
+└── README.md                  # Project documentation
+```
 
-### Deployment
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 🔐 Data Security
 
-### `npm run build` fails to minify
+- **Encryption at Rest:** S3 and DynamoDB use AES-256 server-side encryption.
+- **Encryption in Transit:** All communications via HTTPS.
+- **Secrets Management:** Sensitive configuration via AWS SSM Parameter Store.
+- **Network Isolation:** EC2 and backend resources run in a VPC with strict security groups.
+- **Monitoring:** CloudWatch for real-time logs and alerts.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+--- 
+> *This project demonstrates a modern, cloud-native approach to restaurant order management, combining the flexibility of EC2-hosted frontends with the scalability and efficiency of serverless AWS backends. The architecture is designed for easy expansion, robust security, and minimal operational overhead—making it suitable for both academic and real-world deployment.*
+
+---
