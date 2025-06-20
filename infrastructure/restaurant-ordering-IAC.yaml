@@ -110,9 +110,9 @@ Resources:
           dnf install -y nodejs
 
           # Clone frontend React app
-          wget https://github.com/bindumalavika/Restaurant/archive/main.zip
+          wget https://github.com/bindumalavika/Restaurant-Ordering/archive/main.zip
           unzip main.zip
-          cd Restaurant-main/frontend
+          cd Restaurant-Ordering-main/frontend
 
           # Set up environment variables
           API_URL=$(aws ssm get-parameter --name "OrderApiUrl" --query "Parameter.Value" --output text --region ${AWS::Region})
@@ -124,12 +124,13 @@ Resources:
           npm run build
 
           # Deploy to NGINX web root
-          mkdir -p /var/www/vhosts/frontend
-          cp -R build/* /var/www/vhosts/frontend/
+          sudo mkdir -p /var/www/vhosts/frontend
+          sudo cp -R build/* /var/www/vhosts/frontend/
+          sudo chown -R nginx:nginx /var/www/vhosts/frontend
 
           # Configure NGINX
-          rm -f /etc/nginx/conf.d/default.conf || true
-          cat <<EOF > /etc/nginx/conf.d/frontend.conf
+          sudo rm -f /etc/nginx/conf.d/default.conf || true
+          sudo tee /etc/nginx/conf.d/frontend.conf > /dev/null <<EOF
           server {
               listen 80;
               server_name _;
@@ -143,12 +144,15 @@ Resources:
           }
           EOF
 
+          # Test NGINX config before restarting
+          sudo nginx -t
+
           # Start NGINX
           systemctl enable nginx
           systemctl restart nginx
 
           # Log success
-          echo "Frontend React app deployed with NGINX at port 80" >> /home/ec2-user/deploy.log
+          echo "Frontend React app deployed with NGINX at port 80" | sudo tee -a /home/ec2-user/deploy.log
 
   ### Security Group for Frontend EC2 ###
   RestaurantUISecurityGroup:
