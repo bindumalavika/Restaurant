@@ -112,7 +112,7 @@ Resources:
           # Clone frontend React app
           wget https://github.com/bindumalavika/Restaurant/archive/main.zip
           unzip main.zip
-          cd Restaurant-main
+          cd Restaurant-main/frontend
 
           # Set up environment variables
           API_URL=$(aws ssm get-parameter --name "OrderApiUrl" --query "Parameter.Value" --output text --region ${AWS::Region})
